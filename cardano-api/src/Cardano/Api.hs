@@ -67,19 +67,19 @@ module Cardano.Api
   , EpochNo
 
     -- * Node local state queries
-  , LocalStateQueryError (..)
-  , QueryFilter (..)
-  , DelegationsAndRewards (..)
-  , renderLocalStateQueryError
-  , queryUTxOFromLocalState
-  , queryLocalLedgerState
-  , queryPParamsFromLocalState
-  , queryStakeDistributionFromLocalState
-  , queryDelegationsAndRewardsFromLocalState
+--  , LocalStateQueryError (..)
+--  , DelegationsAndRewards (..)
+--  , renderLocalStateQueryError
+--  , queryLocalLedgerState
+--  , queryPParamsFromLocalState
+--  , queryStakeDistributionFromLocalState
+--  , queryDelegationsAndRewardsFromLocalState
 
     -- * Node local chain sync related
   , getLocalTip
 
+  , ByronAddress
+  , ShelleyAddress
   , ShelleyCoin
   , ShelleyCredentialStaking
   , ShelleyGenesisVerificationHash
@@ -155,7 +155,6 @@ import           Cardano.Api.Convert as X
 import           Cardano.Api.Error as X
 import           Cardano.Api.TxSubmit as X
 import           Cardano.Api.LocalChainSync
-import           Cardano.Api.LocalStateQuery
 
 import qualified Cardano.Chain.Common  as Byron
 import qualified Cardano.Chain.UTxO    as Byron
