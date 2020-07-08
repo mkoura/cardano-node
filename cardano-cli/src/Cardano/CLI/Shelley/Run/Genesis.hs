@@ -29,7 +29,7 @@ import           Control.Monad.Trans.Except (ExceptT)
 import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT,
                    hoistEither, left, newExceptT)
 
-import           Cardano.Api.Typed
+import           Cardano.Api.Typed hiding (toShelleyAddr)
 import           Cardano.Api.TextView
 import           Cardano.Api.Shelley.Genesis
 

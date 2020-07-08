@@ -11,6 +11,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DefaultSignatures #-}
 
@@ -63,6 +64,7 @@ module Cardano.Api.Typed (
     -- * Payment addresses
     -- | Constructing and inspecting normal payment addresses
     Address(..),
+    Shelley.Addr,
     NetworkId(..),
     -- * Byron addresses
     makeByronAddress,
@@ -79,6 +81,7 @@ module Cardano.Api.Typed (
     StakeCredential(..),
     makeStakeAddress,
     StakeKey,
+    Shelley.StakeReference(..),
 
     -- * Building transactions
     -- | Constructing and inspecting transactions
@@ -89,6 +92,7 @@ module Cardano.Api.Typed (
     TxOut(..),
     TxIx(..),
     Lovelace(..),
+    Shelley.Coin,
     makeByronTransaction,
     makeShelleyTransaction,
     SlotNo,
@@ -147,6 +151,8 @@ module Cardano.Api.Typed (
     validateAndHashStakePoolMetadata,
     StakePoolMetadataValidationError(..),
 
+    -- ** Rewards
+    Shelley.RewardAcnt,
     -- * Scripts
     -- | Both 'PaymentCredential's and 'StakeCredential's can use scripts.
     -- Shelley supports multi-signatures via scripts.
@@ -279,10 +285,18 @@ module Cardano.Api.Typed (
     EpochNo,
     NetworkMagic(..),
     makeShelleyUpdateProposal,
+
+    -- ** Utils
+    toNetworkMagic,
+    toShelleyAddr,
+    fromShelleyStakeCredential,
+    toShelleyStakeCredential,
+    fromShelleyStakeReference,
   ) where
 
 
 import           Prelude
+import           GHC.Generics
 
 import           Data.Aeson.Encode.Pretty (encodePretty')
 import           Data.Proxy (Proxy(..))
@@ -560,6 +574,7 @@ deriving instance Eq (Address Byron)
 deriving instance Show (Address Byron)
 
 deriving instance Eq (Address Shelley)
+deriving instance Ord (Address Shelley)
 deriving instance Show (Address Shelley)
 
 data StakeAddress where
@@ -779,6 +794,10 @@ toShelleyStakeCredential (StakeCredentialByKey (StakeKeyHash kh)) =
 toShelleyStakeCredential (StakeCredentialByScript (ScriptHash kh)) =
     Shelley.ScriptHashObj kh
 
+fromShelleyStakeCredential :: Shelley.StakeCredential ShelleyCrypto -> StakeCredential
+fromShelleyStakeCredential (Shelley.KeyHashObj kh) = StakeCredentialByKey (StakeKeyHash kh)
+fromShelleyStakeCredential (Shelley.ScriptHashObj kh) = StakeCredentialByScript (ScriptHash kh)
+
 toShelleyStakeReference :: StakeAddressReference
                         -> Shelley.StakeReference ShelleyCrypto
 toShelleyStakeReference (StakeAddressByValue stakecred) =
@@ -788,6 +807,14 @@ toShelleyStakeReference (StakeAddressByPointer ptr) =
 toShelleyStakeReference  NoStakeAddress =
     Shelley.StakeRefNull
 
+
+fromShelleyStakeReference :: Shelley.StakeReference ShelleyCrypto -> StakeAddressReference
+fromShelleyStakeReference (Shelley.StakeRefBase stkCred) =
+  StakeAddressByValue (fromShelleyStakeCredential stkCred)
+fromShelleyStakeReference (Shelley.StakeRefPtr ptr) =
+  StakeAddressByPointer ptr
+fromShelleyStakeReference (Shelley.StakeRefNull) =
+  NoStakeAddress
 
 -- ----------------------------------------------------------------------------
 -- Transaction Ids
@@ -3133,6 +3160,7 @@ instance Key StakePoolKey where
 
 newtype instance Hash StakePoolKey =
     StakePoolKeyHash (Shelley.KeyHash Shelley.StakePool ShelleyCrypto)
+  deriving Generic
   deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash StakePoolKey) where

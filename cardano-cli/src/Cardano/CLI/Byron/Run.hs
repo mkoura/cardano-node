@@ -68,7 +68,7 @@ runByronClientCommand c =
   case c of
     NodeCmd bc -> runNodeCmd bc
     Genesis outDir params era -> runGenesisCommand outDir params era
-    GetLocalNodeTip network -> firstExceptT ByronCmdQueryError $ runGetLocalNodeTip network
+    GetLocalNodeTip networkId -> firstExceptT ByronCmdQueryError $ runGetLocalNodeTip networkId
     ValidateCBOR cborObject fp -> runValidateCBOR cborObject fp
     PrettyPrintCBOR fp -> runPrettyPrintCBOR fp
     PrettySigningKeyPublic era skF -> runPrettySigningKeyPublic era skF

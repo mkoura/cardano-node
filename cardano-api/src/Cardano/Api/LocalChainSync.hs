@@ -10,7 +10,7 @@ import           Cardano.Prelude hiding (atomically, catch)
 
 import qualified Data.ByteString.Lazy as LBS
 
-import           Cardano.Api.Types (Network(..), toNetworkMagic)
+import qualified Cardano.Api.Typed as Typed
 
 import           Cardano.Config.Types (SocketPath (..))
 
@@ -52,27 +52,27 @@ getLocalTip
   :: forall blk . RunNode blk
   => IOManager
   -> CodecConfig blk
-  -> Network
+  -> Typed.NetworkId
   -> SocketPath
   -> IO (Tip blk)
-getLocalTip iomgr cfg nm sockPath = do
+getLocalTip iomgr cfg nId sockPath = do
   tipVar <- newEmptyTMVarM
-  createNodeConnection iomgr cfg nm sockPath tipVar
+  createNodeConnection iomgr cfg nId sockPath tipVar
   atomically $ takeTMVar tipVar
 
 createNodeConnection
   :: forall blk . RunNode blk
   => IOManager
   -> CodecConfig blk
-  -> Network
+  -> Typed.NetworkId
   -> SocketPath
   -> StrictTMVar IO (Tip blk)
   -> IO ()
-createNodeConnection iomgr cfg nm (SocketPath path) tipVar =
+createNodeConnection iomgr cfg nId (SocketPath path) tipVar =
     connectTo
       (localSnocket iomgr path)
       (NetworkConnectTracers nullTracer nullTracer)
-      (localInitiatorNetworkApplication cfg nm tipVar)
+      (localInitiatorNetworkApplication cfg nId tipVar)
       path
     `catch` handleMuxError
 
@@ -87,11 +87,11 @@ localInitiatorNetworkApplication
      , MonadTimer m
      )
   => CodecConfig blk
-  -> Network
+  -> Typed.NetworkId
   -> StrictTMVar m (Tip blk)
   -> Versions NodeToClientVersion DictVersion
               (OuroborosApplication 'InitiatorMode LocalAddress LBS.ByteString m () Void)
-localInitiatorNetworkApplication cfg nm tipVar =
+localInitiatorNetworkApplication cfg nId tipVar =
     foldMapVersions
       (\v ->
         versionedNodeToClientProtocols
@@ -103,7 +103,7 @@ localInitiatorNetworkApplication cfg nm tipVar =
   proxy :: Proxy blk
   proxy = Proxy
 
-  versionData = NodeToClientVersionData { networkMagic = toNetworkMagic nm }
+  versionData = NodeToClientVersionData { networkMagic = Typed.toNetworkMagic nId }
 
   protocols clientVersion =
       NodeToClientProtocols {

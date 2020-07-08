@@ -1,11 +1,15 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Cardano.CLI.Shelley.Run.Query
   ( ShelleyQueryCmdError
@@ -13,7 +17,6 @@ module Cardano.CLI.Shelley.Run.Query
   , runQueryCmd
   ) where
 
-import           Prelude (String)
 import           Cardano.Prelude hiding (atomically, option, threadDelay)
 
 import qualified Codec.CBOR.Term as CBOR
@@ -23,10 +26,9 @@ import           Control.Monad.Trans.Except (ExceptT)
 import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT,
                    hoistEither, newExceptT)
 import           Control.Tracer (Tracer)
-import           Data.Aeson (ToJSON (..), (.=))
+import           Data.Aeson (ToJSON (..))
 import qualified Data.Aeson as Aeson
 import           Data.Aeson.Encode.Pretty (encodePretty)
-import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Functor.Contravariant (contramap)
 import           Data.HashMap.Strict (HashMap)
@@ -38,9 +40,10 @@ import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 import           Data.Void (Void)
-import           Numeric (showEFloat)
+--import           Numeric (showEFloat)
 
-import           Cardano.Api
+import           Cardano.Api (getLocalTip, textShow)
+import           Cardano.Api.Typed hiding (localStateQueryClient)
 import           Cardano.Api.Protocol.Shelley (mkNodeClientProtocolShelley)
 
 import           Cardano.CLI.Shelley.Commands (QueryFilter(..))
@@ -51,7 +54,7 @@ import           Cardano.CLI.Shelley.Parsers (OutputFile (..), QueryCmd (..))
 import           Cardano.Config.Shelley.Orphans ()
 import           Cardano.Config.Types (SocketPath(..))
 
-import           Cardano.Crypto.Hash.Class (getHashBytesAsHex)
+--import           Cardano.Crypto.Hash.Class (getHashBytesAsHex)
 import           Network.Mux (MuxMode(..), MuxTrace, WithMuxBearer)
 import           Ouroboros.Consensus.Block (CodecConfig)
 
@@ -69,11 +72,10 @@ import           Ouroboros.Network.NodeToClient (ConnectionId, DictVersion, Hand
 import qualified Ouroboros.Network.NodeToClient as NodeToClient
 
 
-import qualified Shelley.Spec.Ledger.Address as Ledger (RewardAcnt (..))
 import           Shelley.Spec.Ledger.Coin (Coin (..))
+import qualified Shelley.Spec.Ledger.Credential              as Shelley
 import           Shelley.Spec.Ledger.Delegation.Certificates (PoolDistr(..))
 import qualified Shelley.Spec.Ledger.Delegation.Certificates as Ledger (PoolDistr(..))
-import           Shelley.Spec.Ledger.Keys (Hash, KeyHash(..), KeyRole (..), VerKeyVRF)
 import           Shelley.Spec.Ledger.LedgerState (EpochState)
 import qualified Shelley.Spec.Ledger.LedgerState as Ledger
 import           Shelley.Spec.Ledger.PParams (PParams)
@@ -144,12 +146,12 @@ runQueryCmd cmd =
       runQueryStakeAddressInfo addr network mOutFile
     QueryLedgerState network mOutFile ->
       runQueryLedgerState network mOutFile
-    QueryUTxO qFilter network mOutFile ->
-      runQueryUTxO qFilter network mOutFile
+    QueryUTxO qFilter networkId mOutFile ->
+      runQueryUTxO qFilter networkId mOutFile
     _ -> liftIO $ putStrLn $ "runQueryCmd: " ++ show cmd
 
 runQueryProtocolParameters
-  :: Network
+  :: NetworkId
   -> Maybe OutputFile
   -> ExceptT ShelleyQueryCmdError IO ()
 runQueryProtocolParameters network mOutFile = do
@@ -172,7 +174,7 @@ writeProtocolParameters mOutFile pparams =
         LBS.writeFile fpath (encodePretty pparams)
 
 runQueryTip
-  :: Network
+  :: NetworkId
   -> Maybe OutputFile
   -> ExceptT ShelleyQueryCmdError IO ()
 runQueryTip network mOutFile = do
@@ -189,22 +191,22 @@ runQueryTip network mOutFile = do
 
 runQueryUTxO
   :: QueryFilter
-  -> Network
+  -> NetworkId
   -> Maybe OutputFile
   -> ExceptT ShelleyQueryCmdError IO ()
-runQueryUTxO qfilter network mOutFile = do
+runQueryUTxO qfilter networkId mOutFile = do
   sockPath <- firstExceptT ShelleyQueryEnvVarSocketErr readEnvSocketPath
   let ptclClientInfo = pClientInfoCodecConfig
                      . protocolClientInfo
                      $ mkNodeClientProtocolShelley
   tip <- liftIO $ withIOManager $ \iomgr ->
-            getLocalTip iomgr ptclClientInfo network sockPath
+            getLocalTip iomgr ptclClientInfo networkId sockPath
   filteredUtxo <- firstExceptT NodeLocalStateQueryError $
-    queryUTxOFromLocalState network sockPath qfilter (getTipPoint tip)
+    queryUTxOFromLocalState networkId sockPath qfilter (getTipPoint tip)
   writeFilteredUTxOs mOutFile filteredUtxo
 
 runQueryLedgerState
-  :: Network
+  :: NetworkId
   -> Maybe OutputFile
   -> ExceptT ShelleyQueryCmdError IO ()
 runQueryLedgerState network mOutFile = do
@@ -223,8 +225,8 @@ runQueryLedgerState network mOutFile = do
       firstExceptT ShelleyHelpersError $ pPrintCBOR lbs
 
 runQueryStakeAddressInfo
-  :: Address
-  -> Network
+  :: StakeAddress
+  -> NetworkId
   -> Maybe OutputFile
   -> ExceptT ShelleyQueryCmdError IO ()
 runQueryStakeAddressInfo addr network mOutFile = do
@@ -247,9 +249,9 @@ runQueryStakeAddressInfo addr network mOutFile = do
 -- | An error that can occur while querying a node's local state.
 data LocalStateQueryError
   = AcquireFailureError !AcquireFailure
-  | ByronAddressesNotSupportedError !(Set ByronAddress)
+--  | ByronAddressesNotSupportedError !(Set ByronAddress)
   -- ^ The query does not support Byron addresses.
-  | NonStakeAddressesNotSupportedError !(Set Address)
+ -- | NonStakeAddressesNotSupportedError !(Set Address)
   -- ^ The query does not support non-stake addresses.
   -- Associated with this error are the specific non-stake addresses that were
   -- provided.
@@ -307,7 +309,7 @@ printFilteredUTxOs (Ledger.UTxO utxo) = do
       in Text.pack $ replicate (max 1 (len - slen)) ' ' ++ str
 
 runQueryStakeDistribution
-  :: Network
+  :: NetworkId
   -> Maybe OutputFile
   -> ExceptT ShelleyQueryCmdError IO ()
 runQueryStakeDistribution network mOutFile = do
@@ -328,9 +330,10 @@ writeStakeDistribution (Just (OutputFile outFile)) (PoolDistr stakeDist) =
     handleIOExceptT (ShelleyQueryWriteStakeDistributionError outFile) $
       LBS.writeFile outFile (encodePretty stakeDist)
 
-writeStakeDistribution Nothing stakeDist =
-    liftIO $ printStakeDistribution stakeDist
+writeStakeDistribution Nothing _stakeDist = panic "TODO"
+   -- liftIO $ printStakeDistribution stakeDist
 
+{-
 printStakeDistribution :: PoolDistr TPraosStandardCrypto -> IO ()
 printStakeDistribution (PoolDistr stakeDist) = do
     Text.putStrLn title
@@ -343,19 +346,19 @@ printStakeDistribution (PoolDistr stakeDist) = do
     title =
       "                           PoolId                                 Stake frac"
 
-    showStakeDistr :: KeyHash 'StakePool crypto
+    showStakeDistr :: PoolId
                    -> Rational
-                   -> Hash crypto (VerKeyVRF crypto)
+                   -> Hash VrfKey
                    -> String
-    showStakeDistr (KeyHash poolId) stakeFraction _vrfKeyId =
+    showStakeDistr (StakePoolKeyHash _poolId) stakeFraction _vrfKeyId =
       concat
-        [ BS.unpack (getHashBytesAsHex poolId)
+        [ BS.unpack (panic "") --(getHashBytesAsHex )
         , "   "
         , showEFloat (Just 3) (fromRational stakeFraction :: Double) ""
 -- TODO: we could show the VRF id, but it will then not fit in 80 cols
 --      , show vrfKeyId
         ]
-
+-}
 
 -- From Cardano.Api
 
@@ -365,7 +368,7 @@ printStakeDistribution (PoolDistr stakeDist) = do
 -- This one is Shelley-specific because the query is Shelley-specific.
 --
 queryUTxOFromLocalState
-  :: Network
+  :: NetworkId
   -> SocketPath
   -> QueryFilter
   -> Point (ShelleyBlock TPraosStandardCrypto)
@@ -386,76 +389,40 @@ applyUTxOFilter
   -> Either LocalStateQueryError (Query blk (Ledger.UTxO c))
 applyUTxOFilter qFilter =
     case qFilter of
-      FilterByAddress addrs -> do shelleyAddrs <- checkAddresses $ partitionAddresses addrs
-                                  Right $ GetFilteredUTxO shelleyAddrs
+      FilterByAddress addrs -> Right . GetFilteredUTxO $ getShelleyAddresses addrs
       NoFilter -> Right GetUTxO
-  where
-    checkAddresses :: (Set ByronAddress, Set ShelleyAddress) -> Either LocalStateQueryError (Set ShelleyAddress)
-    checkAddresses (byronAddrs, shelleyAddrs) = if Set.null byronAddrs
-                                                then Right $ shelleyAddrs
-                                                else Left $ ByronAddressesNotSupportedError byronAddrs
 
--- | Partitions a 'Set' of addresses such that Byron addresses are on the left
--- and Shelley on the right.
-partitionAddresses :: Set Address -> (Set ByronAddress, Set ShelleyAddress)
-partitionAddresses = partitionMap isAddressByron getByronAddress getShelleyAddress
-  where
-    isAddressByron :: Address -> Bool
-    isAddressByron (AddressByron _) = True
-    isAddressByron _ = False
 
-    getByronAddress :: Address -> ByronAddress
-    getByronAddress (AddressByron ab) = ab
-    getByronAddress _ =
-      panic "Cardano.CLI.Shelley.Run.Query.partitionAddresses.getByronAddress: Impossible"
+getShelleyAddresses :: Set (Address Shelley) -> Set (Addr TPraosStandardCrypto)
+getShelleyAddresses addresses = Set.map toShelleyAddr addresses
 
-    getShelleyAddress :: Address -> ShelleyAddress
-    getShelleyAddress (AddressShelley as) = as
-    getShelleyAddress _ =
-       panic "Cardano.CLI.Shelley.Run.Query.partitionAddresses.getShelleyAddress: Impossible"
+getShelleyStakeCredentials :: Set StakeAddress -> Set (Shelley.StakeCredential TPraosStandardCrypto)
+getShelleyStakeCredentials addrs =
+  Set.map getStakeCredential addrs
+ where
+  getStakeCredential :: StakeAddress -> Shelley.StakeCredential TPraosStandardCrypto
+  getStakeCredential (StakeAddress _ cred) = cred
 
-partitionMap :: (Ord b, Ord c) => (a -> Bool) -> (a -> b) -> (a -> c) -> Set a -> (Set b, Set c)
-partitionMap cond leftFn rightFn xs = (Set.map leftFn ys, Set.map rightFn zs)
-  where
-    (ys, zs) = Set.partition cond xs
-
-getShelleyStakeCredentials
-  :: Set Address
-  -> Either LocalStateQueryError (Set ShelleyCredentialStaking)
-getShelleyStakeCredentials = getStakeCreds
-  where
-    isStakeAddress :: Address -> Bool
-    isStakeAddress (AddressShelleyReward (Ledger.RewardAcnt _ _)) = True
-    isStakeAddress _ = False
-
-    getStakeCred :: Address -> ShelleyCredentialStaking
-    getStakeCred (AddressShelleyReward (Ledger.RewardAcnt _ cred)) = cred
-    getStakeCred _ =
-      panic "Cardano.CLI.Shelley.Run.Query.getShelleyStakeCredentials.getStakeCred: Impossible"
-
-    getStakeCreds :: Set Address -> Either LocalStateQueryError (Set ShelleyCredentialStaking)
-    getStakeCreds addrs = do
-      let (stakeCreds, nonStakeAddrs) = partitionMap isStakeAddress getStakeCred identity addrs
-      if Set.null nonStakeAddrs
-      then Right stakeCreds
-      else Left $ NonStakeAddressesNotSupportedError nonStakeAddrs
 
 renderLocalStateQueryError :: LocalStateQueryError -> Text
 renderLocalStateQueryError lsqErr =
   case lsqErr of
     AcquireFailureError err -> "Local state query acquire failure: " <> show err
-    ByronAddressesNotSupportedError byronAddrs ->
-      "The attempted local state query does not support Byron addresses: " <> show byronAddrs
-    NonStakeAddressesNotSupportedError addrs ->
-      "The attempted local state query does not support non-stake addresses: " <> show addrs
+    --ByronAddressesNotSupportedError byronAddrs ->
+    --  "The attempted local state query does not support Byron addresses: " <> show byronAddrs
+  --  NonStakeAddressesNotSupportedError addrs ->
+  --    "The attempted local state query does not support non-stake addresses: " <> show addrs
 
 -- | A mapping of Shelley reward accounts to both the stake pool that they
 -- delegate to and their reward account balance.
 newtype DelegationsAndRewards
   = DelegationsAndRewards
-      (Map ShelleyRewardAccount (Maybe ShelleyVerificationKeyHashStakePool, ShelleyCoin))
+      (Map (RewardAcnt TPraosStandardCrypto) (Maybe (Hash StakePoolKey), Coin))
   deriving Generic
   deriving newtype NoUnexpectedThunks
+
+instance NoUnexpectedThunks (Hash StakePoolKey) where
+    whnfNoUnexpectedThunks _ _ = pure NoUnexpectedThunks
 
 instance ToJSON DelegationsAndRewards where
   toJSON (DelegationsAndRewards delegsAndRwds) =
@@ -464,13 +431,13 @@ instance ToJSON DelegationsAndRewards where
     where
       delegAndRwdToJson
         :: HashMap Text Aeson.Value
-        -> ShelleyRewardAccount
-        -> (Maybe ShelleyVerificationKeyHashStakePool, ShelleyCoin)
+        -> RewardAcnt TPraosStandardCrypto
+        -> (Maybe (Hash StakePoolKey), Coin)
         -> HashMap Text Aeson.Value
-      delegAndRwdToJson acc k (d, r) =
+      delegAndRwdToJson acc _k (_d, _r) =
         HMS.insert
-          (addressToHex $ AddressShelleyReward k)
-          (Aeson.object ["delegation" .= d, "rewardAccountBalance" .= r])
+          (panic "")--(addressToHex $ AddressShelleyReward k) Implement a SerialiseAsRawByres instance for rewardacnt
+          (panic "") -- (Aeson.object ["delegation" .= d, "rewardAccountBalance" .= r])
           acc
 
 -- | Query the current protocol parameters from a Shelley node via the local
@@ -480,7 +447,7 @@ instance ToJSON DelegationsAndRewards where
 --
 queryPParamsFromLocalState
   :: blk ~ ShelleyBlock TPraosStandardCrypto
-  => Network
+  => NetworkId
   -> SocketPath
   -> Point blk
   -> ExceptT LocalStateQueryError IO PParams
@@ -501,7 +468,7 @@ queryPParamsFromLocalState network socketPath point = do
 --
 queryStakeDistributionFromLocalState
   :: blk ~ ShelleyBlock TPraosStandardCrypto
-  => Network
+  => NetworkId
   -> SocketPath
   -> Point blk
   -> ExceptT LocalStateQueryError IO (Ledger.PoolDistr TPraosStandardCrypto)
@@ -517,7 +484,7 @@ queryStakeDistributionFromLocalState network socketPath point = do
 
 queryLocalLedgerState
   :: blk ~ ShelleyBlock TPraosStandardCrypto
-  => Network
+  => NetworkId
   -> SocketPath
   -> Point blk
   -> ExceptT LocalStateQueryError IO (Either LByteString (Ledger.EpochState TPraosStandardCrypto))
@@ -542,14 +509,14 @@ queryLocalLedgerState network socketPath point = do
 -- This one is Shelley-specific because the query is Shelley-specific.
 --
 queryDelegationsAndRewardsFromLocalState
-  :: Network
+  :: NetworkId
   -> SocketPath
-  -> Set Address
+  -> Set StakeAddress
   -> Point (ShelleyBlock TPraosStandardCrypto)
   -> ExceptT LocalStateQueryError IO DelegationsAndRewards
 queryDelegationsAndRewardsFromLocalState network socketPath addrs point = do
-    creds <- hoistEither $ getShelleyStakeCredentials addrs
-    let pointAndQuery = (point, GetFilteredDelegationsAndRewardAccounts creds)
+    let creds = getShelleyStakeCredentials addrs
+        pointAndQuery = (point, GetFilteredDelegationsAndRewardAccounts creds)
     res <- newExceptT $ liftIO $
       queryNodeLocalState
         nullTracer
@@ -559,11 +526,12 @@ queryDelegationsAndRewardsFromLocalState network socketPath addrs point = do
         pointAndQuery
     pure $ toDelegsAndRwds res
   where
-    toDelegsAndRwds (delegs, rwdAcnts) =
-      DelegationsAndRewards $
-        Map.mapWithKey
-          (\k v -> (Map.lookup (Ledger.getRwdCred k) delegs, v))
-          rwdAcnts
+    --toDelegsAndRwds :: (Map (Credential Staking TPraosStandardCrypto) (KeyHash StakePool TPraosStandardCrypto), Ledger.RewardAccounts TPraosStandardCrypto) -> DelegationsAndRewards
+    toDelegsAndRwds _ = panic "TODO" --(delegs, rwdAcnts)
+    --  DelegationsAndRewards $
+    --    Map.mapWithKey
+    --      (\k v -> (Map.lookup (Ledger.getRwdCred k) delegs, v))
+    --      rwdAcnts
 
 -- -------------------------------------------------------------------------------------------------
 
@@ -576,7 +544,7 @@ queryNodeLocalState
   :: forall blk result. RunNode blk
   => Trace IO Text
   -> CodecConfig blk
-  -> Network
+  -> NetworkId
   -> SocketPath
   -> (Point blk, Query blk result)
   -> IO (Either LocalStateQueryError result)
@@ -606,7 +574,7 @@ localInitiatorNetworkApplication
   :: forall blk result. RunNode blk
   => Trace IO Text
   -> CodecConfig blk
-  -> Network
+  -> NetworkId
   -> StrictTMVar IO (Either LocalStateQueryError result)
   -> (Point blk, Query blk result)
   -> Versions

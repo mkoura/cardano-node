@@ -15,6 +15,7 @@ import           Cardano.Prelude hiding (unlines)
 import           Control.Monad.Trans.Except.Extra (firstExceptT)
 import qualified Data.Text as T
 
+import qualified Cardano.Api.Typed as Typed
 import           Cardano.Chain.Slotting (EpochSlots(..))
 import           Ouroboros.Consensus.Cardano
                    (protocolClientInfo, SecurityParam(..))
@@ -23,7 +24,7 @@ import           Ouroboros.Consensus.Util.Condense (Condense(..))
 import           Ouroboros.Network.Block
 import           Ouroboros.Network.NodeToClient (withIOManager)
 
-import           Cardano.Api (Network(..), getLocalTip)
+import           Cardano.Api (getLocalTip)
 import           Cardano.Api.Protocol.Byron (mkNodeClientProtocolByron)
 import           Cardano.CLI.Environment
                    (EnvSocketError, readEnvSocketPath, renderEnvSocketError)
@@ -41,8 +42,8 @@ renderByronQueryError err =
 -- Query local node's chain tip
 --------------------------------------------------------------------------------
 
-runGetLocalNodeTip :: Network -> ExceptT ByronQueryError IO ()
-runGetLocalNodeTip network = do
+runGetLocalNodeTip :: Typed.NetworkId -> ExceptT ByronQueryError IO ()
+runGetLocalNodeTip networkId = do
     sockPath <- firstExceptT ByronQueryEnvVarSocketErr $ readEnvSocketPath
     let ptclClientInfo = pClientInfoCodecConfig . protocolClientInfo $
           mkNodeClientProtocolByron
@@ -51,7 +52,7 @@ runGetLocalNodeTip network = do
 
     liftIO $ do
       tip <- withIOManager $ \iomgr ->
-               getLocalTip iomgr ptclClientInfo network sockPath
+               getLocalTip iomgr ptclClientInfo networkId sockPath
       putTextLn (getTipOutput tip)
   where
     getTipOutput :: forall blk. Condense (HeaderHash blk) => Tip blk -> Text
